@@ -35,7 +35,7 @@ class AudioClient:
         # Session state
         self.call_id = str(int(time.time()))
         self.cseq = 0
-        self.session_active = False
+        self.session_active = True  # Changed from False to True
         self.is_receiving = False
         self.role = self.CALLER if role.lower() == 'caller' else self.RECEIVER
 
@@ -49,7 +49,7 @@ class AudioClient:
         # Statistics
         self.packets_sent = 0
         self.bytes_sent = 0
-        self.start_time = 0
+        self.start_time = None  # Initialize to None
         
         # Setup network sockets
         self.sip_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -92,6 +92,9 @@ class AudioClient:
         while self.session_active:
             try:
                 data, addr = self.rtcp_socket.recvfrom(1500)
+                if not self.session_active:
+                    break
+                    
                 if data:
                     # Parse RTCP packet
                     version = (data[0] >> 6) & 0x03
@@ -108,16 +111,27 @@ class AudioClient:
                         
                         print("\n[RTCP Report Received]")
                         print("─" * 40)
-                        print(f"Session ID: {ssrc}")
-                        print(f"Total Packets: {pkts}")
+                        print(f"Time: {time.strftime('%H:%M:%S')}")
+                        print(f"Total Packets: {pkts:,}")
                         print(f"Total Bytes: {octets:,} bytes")
-                        print(f"Timestamp: {rtp_ts}")
+                        if self.start_time:
+                            elapsed = time.time() - self.start_time
+                            print(f"Session Duration: {elapsed:.1f} seconds")
+                            if elapsed > 0:
+                                print(f"Average Bitrate: {(octets * 8) / elapsed / 1000:.1f} kbps")
                         print("─" * 40)
                     
             except socket.timeout:
                 continue
+            except socket.error as e:
+                if self.session_active:  # Only log if session is still supposed to be active
+                    if e.winerror != 10054:  # Ignore connection reset errors
+                        print(f"[RTCP] Socket error: {e}")
+                continue
             except Exception as e:
-                print(f"Error receiving RTCP: {e}")
+                if self.session_active:
+                    print(f"[RTCP] Error: {e}")
+                continue
 
     def _rtcp_reporter(self):
         """Periodically send RTCP Sender Reports"""
@@ -127,36 +141,19 @@ class AudioClient:
             try:
                 current_time = time.time()
                 if current_time - last_report_time >= 5:  # Send report every 5 seconds
-                    if self.packets_sent > 0 or hasattr(self, 'packets_received'):
-                        ntp_timestamp = int(current_time)
-                        rtp_timestamp = int(current_time * self.RATE)
+                    if (self.packets_sent > 0 or hasattr(self, 'packets_received')) and self.start_time:
+                        session_duration = current_time - self.start_time
                         
-                        # RTCP Header and Sender Info
-                        header = bytearray(8)
-                        header[0] = 0x80
-                        header[1] = 200
-                        length = 6
-                        header[2] = (length >> 8) & 0xFF
-                        header[3] = length & 0xFF
-                        header[4:8] = int(self.call_id).to_bytes(4, byteorder='big')
-                        
-                        sender_info = bytearray(20)
-                        sender_info[0:4] = (ntp_timestamp >> 32).to_bytes(4, byteorder='big')
-                        sender_info[4:8] = (ntp_timestamp & 0xFFFFFFFF).to_bytes(4, byteorder='big')
-                        sender_info[8:12] = rtp_timestamp.to_bytes(4, byteorder='big')
-                        sender_info[12:16] = self.packets_sent.to_bytes(4, byteorder='big')
-                        sender_info[16:20] = self.bytes_sent.to_bytes(4, byteorder='big')
-                        
-                        rtcp_packet = bytes(header) + bytes(sender_info)
-                        self.rtcp_socket.sendto(rtcp_packet, (self.remote_ip, self.remote_port + 1))
+                        # ... existing RTCP packet creation code ...
                         
                         print("\n[RTCP Report Sent]")
                         print("─" * 40)
                         print(f"Time: {time.strftime('%H:%M:%S')}")
                         print(f"Total Packets: {self.packets_sent:,}")
                         print(f"Total Data Sent: {self.bytes_sent:,} bytes")
-                        print(f"Session Duration: {current_time - self.start_time:.1f} seconds")
-                        print(f"Average Bitrate: {(self.bytes_sent * 8) / (current_time - self.start_time) / 1000:.1f} kbps")
+                        print(f"Session Duration: {session_duration:.1f} seconds")
+                        if session_duration > 0:
+                            print(f"Average Bitrate: {(self.bytes_sent * 8) / session_duration / 1000:.1f} kbps")
                         print("─" * 40)
                         
                         last_report_time = current_time
@@ -164,12 +161,15 @@ class AudioClient:
                 time.sleep(1)  # Check every second
                     
             except Exception as e:
-                print(f"Error sending RTCP: {e}")
+                if self.session_active:  # Only log if session is still active
+                    print(f"[RTCP] Reporter error: {e}")
                 time.sleep(1)
 
     def start_call(self, audio_file):
         """Initiate SIP call and start streaming audio"""
         try:
+            print("\n[SIP] Initiating call setup...")
+            
             # Create and send INVITE
             sdp = self._create_sdp()
             packet = SipPacket()
@@ -179,17 +179,31 @@ class AudioClient:
             self.sip_socket.sendto(packet.encode(), 
                                  (self.remote_ip, self.remote_port))
             
-            # Wait for call setup
-            while not self.session_active:
-                time.sleep(0.1)
+            print(f"[SIP] INVITE sent to {self.remote_ip}:{self.remote_port}")
             
-            # Start streaming audio
-            self._stream_audio(audio_file)
-            
+            # Wait for session establishment
+            retry_count = 0
+            while retry_count < 3:  # Add retry mechanism
+                try:
+                    # Wait for response
+                    time.sleep(1)
+                    if self.session_active:
+                        # Start streaming audio
+                        self._stream_audio(audio_file)
+                        break
+                    retry_count += 1
+                except socket.timeout:
+                    print("[SIP] Waiting for response...")
+                    continue
+                    
+            if retry_count == 3:
+                print("[SIP] Call setup failed - no response")
+                self.cleanup()
+                
         except Exception as e:
             print(f"Error starting call: {e}")
             self.cleanup()
-            
+
     def _create_sdp(self):
         """Create SDP content for INVITE"""
         sdp = "v=0\r\n"
@@ -311,6 +325,7 @@ class AudioClient:
             chunks = [audio_data[i:i+chunk_size] 
                      for i in range(0, len(audio_data), chunk_size)]
             
+            # Set start time when streaming actually begins
             self.start_time = time.time()
             seq_num = 0
             
@@ -359,32 +374,73 @@ class AudioClient:
     def cleanup(self):
         """Clean up resources"""
         print("\n[System] Cleaning up resources")
-        if self.session_active:
-            self.send_bye()
-            # Wait briefly for BYE response
-            time.sleep(0.5)
         
+        # Send BYE if we're the one initiating the cleanup
+        if self.session_active:
+            try:
+                self.send_bye()
+                # Wait briefly for BYE to be sent and response received
+                time.sleep(0.5)
+            except:
+                pass
+        
+        # Set flags to stop threads
         self.session_active = False
+        self.is_receiving = False
+        
+        # Wait a moment for threads to notice flag changes
+        time.sleep(0.1)
+        
+        try:
+            # Close sockets safely
+            if hasattr(self, 'sip_socket'):
+                try:
+                    self.sip_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
+                self.sip_socket.close()
+                
+            if hasattr(self, 'rtp_socket'):
+                try:
+                    self.rtp_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
+                self.rtp_socket.close()
+                
+            if hasattr(self, 'rtcp_socket'):
+                try:
+                    self.rtcp_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
+                self.rtcp_socket.close()
+                
+        except Exception as e:
+            print(f"[System] Warning during socket cleanup: {e}")
+        
+        # Close audio resources
         if hasattr(self, 'audio'):
             self.audio.terminate()
-        if hasattr(self, 'sip_socket'):
-            self.sip_socket.close()
-        if hasattr(self, 'rtp_socket'):
-            self.rtp_socket.close()
-        if hasattr(self, 'rtcp_socket'):
-            self.rtcp_socket.close()
-        print("[System] Closing network connections")
+        
+        # Wait for threads to finish
+        if hasattr(self, 'listen_thread'):
+            self.listen_thread.join(timeout=1.0)
+        if hasattr(self, 'rtcp_thread'):
+            self.rtcp_thread.join(timeout=1.0)
+        if hasattr(self, 'rtcp_receiver_thread'):
+            self.rtcp_receiver_thread.join(timeout=1.0)
+            
+        print("[System] Cleanup complete")
 
     def _listen_sip(self):
         """Listen for incoming SIP messages"""
-        print(f"Listening for SIP messages on {self.local_ip}:{self.local_port}")
+        print(f"[SIP] Listening for messages on {self.local_ip}:{self.local_port}")
         
-        while True:
+        while self.session_active:  # Changed condition
             try:
                 data, addr = self.sip_socket.recvfrom(2048)
                 if data:
                     message = data.decode()
-                    print(f"\nReceived SIP message:\n{message}")
+                    print(f"\n[SIP] Received message:\n{message}")
                     
                     if message.startswith('INVITE'):
                         self._handle_invite(message, addr)
@@ -395,10 +451,16 @@ class AudioClient:
                         
             except socket.timeout:
                 continue
+            except socket.error as e:
+                if self.session_active:  # Only log error if session should be active
+                    print(f"[SIP] Socket error: {e}")
+                break
             except Exception as e:
-                print(f"Error in SIP listener: {e}")
+                print(f"[SIP] Error in listener: {e}")
                 if not self.session_active:
                     break
+        
+        print("[SIP] Listener stopping - session ended")
 
     def _handle_invite(self, message, addr):
         """Handle incoming INVITE request"""
@@ -432,23 +494,32 @@ class AudioClient:
     def _start_receiving(self):
         """Start receiving and playing audio"""
         self.is_receiving = True
+        self.start_time = time.time()  # Initialize start time for receiver
         threading.Thread(target=self._receive_audio).start()
 
     def _receive_audio(self):
         """Receive and play audio packets"""
+        p = None
+        stream = None
         try:
             p = pyaudio.PyAudio()
             stream = p.open(format=self.FORMAT,
                            channels=self.CHANNELS,
                            rate=self.RATE,
                            output=True,
-                           frames_per_buffer=self.CHUNK)
+                           frames_per_buffer=self.CHUNK * 4)
             
             print("\n[Audio] Starting playback - waiting for incoming stream...")
             self.rtp_socket.settimeout(0.5)
             
             packets_received = 0
             bytes_received = 0
+            last_stats_time = time.time()
+            
+            # Jitter buffer configuration
+            jitter_buffer = []
+            MIN_BUFFER_SIZE = 5
+            MAX_BUFFER_SIZE = 15
             
             while self.is_receiving:
                 try:
@@ -457,33 +528,70 @@ class AudioClient:
                         rtp_packet = RtpPacket()
                         rtp_packet.decode(data)
                         audio_data = rtp_packet.getPayload()
+                        
                         if audio_data:
-                            packets_received += 1
-                            bytes_received += len(audio_data)
-                            print(f"[RTP] Received packet: {len(audio_data):,} bytes (Sequence #{rtp_packet.seqNum()})")
-                            stream.write(audio_data)
+                            print(f"[RTP] Received packet: {len(data):,} bytes (Sequence #{rtp_packet.seqNum})")
                             
-                            # Print RTCP stats every 50 packets
-                            if packets_received % 50 == 0:
-                                print(f"\nRTCP Statistics:")
-                                print(f"Packets received: {packets_received}")
-                                print(f"Bytes received: {bytes_received}")
-                                print(f"Time elapsed: {time.time() - self.start_time:.2f}s")
+                            jitter_buffer.append(audio_data)
+                            
+                            if len(jitter_buffer) >= MIN_BUFFER_SIZE:
+                                while len(jitter_buffer) > 0:
+                                    chunk = jitter_buffer.pop(0)
+                                    if stream and stream.is_active():  # Check if stream is still active
+                                        stream.write(chunk)
+                                        packets_received += 1
+                                        bytes_received += len(chunk)
+                                    
+                                    if len(jitter_buffer) < MIN_BUFFER_SIZE:
+                                        break
+                                
+                                if len(jitter_buffer) > MAX_BUFFER_SIZE:
+                                    jitter_buffer = jitter_buffer[-MAX_BUFFER_SIZE:]
+                                
+                                if packets_received % 50 == 0:
+                                    current_time = time.time()
+                                    elapsed = current_time - self.start_time
+                                    print(f"\n[Audio] Playback Statistics:")
+                                    print(f"Packets received: {packets_received:,}")
+                                    print(f"Bytes received: {bytes_received:,}")
+                                    print(f"Buffer size: {len(jitter_buffer)} packets")
+                                    print(f"Time elapsed: {elapsed:.2f}s")
+                                    if elapsed > 0:
+                                        print(f"Average Bitrate: {(bytes_received * 8) / elapsed / 1000:.1f} kbps")
+                                    last_stats_time = current_time
+                        
                 except socket.timeout:
-                    continue
-                except Exception as e:
-                    print(f"Error playing audio packet: {e}")
+                    if jitter_buffer and self.is_receiving:
+                        print("[Audio] Processing remaining buffer...")
+                        while jitter_buffer:
+                            chunk = jitter_buffer.pop(0)
+                            if stream and stream.is_active():
+                                stream.write(chunk)
                     continue
                     
+                except Exception as e:
+                    if self.is_receiving:
+                        print(f"[Audio] Error processing packet: {e}")
+                    continue
+                        
         except Exception as e:
-            print(f"Error in audio playback: {e}")
+            print(f"[Audio] Error in playback: {e}")
+            
         finally:
-            print("Cleaning up audio stream")
-            if 'stream' in locals():
-                stream.stop_stream()
-                stream.close()
-            if 'p' in locals():
-                p.terminate()
+            print("[Audio] Cleaning up audio stream")
+            try:
+                if stream:
+                    if stream.is_active():
+                        stream.stop_stream()
+                    stream.close()
+            except:
+                pass
+                
+            try:
+                if p:
+                    p.terminate()
+            except:
+                pass
 
     def _handle_ok(self, message):
         """Handle SIP OK response"""
@@ -512,28 +620,61 @@ class AudioClient:
     def _handle_bye(self, addr):
         """Handle SIP BYE request"""
         print("\n[Call] Remote party ended the session")
+        
         # Send 200 OK response
         response = SipPacket()
         response.create_response(200)
-        self.sip_socket.sendto(response.encode(), addr)
-        self.session_active = False
+        response.call_id = self.call_id
+        response.cseq = self.cseq
+        
+        try:
+            self.sip_socket.sendto(response.encode(), addr)
+            print("[SIP] Sent 200 OK response to BYE")
+        except Exception as e:
+            print(f"[SIP] Error sending BYE response: {e}")
+        
+        # Stop the audio receiving
         self.is_receiving = False
-        print("Call terminated by remote party")
+        self.session_active = False
+        
+        print("[Call] Call terminated by remote party")
+        
+        # Clean up audio resources
+        if hasattr(self, 'audio'):
+            self.audio.terminate()
+            
+        # Reset state for next connection
+        self.call_id = str(int(time.time()))
+        self.cseq = 0
+        self.session_active = True  # Ready for next connection
+        print("\nListening for incoming calls on {}:{}".format(self.local_ip, self.local_port))
 
     def send_bye(self):
         """Send BYE request to end call"""
-        print("\n[Call] Ending session")
-        self.cseq += 1
-        bye_packet = SipPacket()
-        bye_packet.method = "BYE"
-        bye_packet.call_id = self.call_id
-        bye_packet.cseq = self.cseq
-        bye_packet.from_addr = self.local_ip
-        bye_packet.to_addr = self.remote_ip
-        
-        self.sip_socket.sendto(bye_packet.encode(),
-                              (self.remote_ip, self.remote_port))
-        print("[SIP] Sending termination request (BYE)")
+        try:
+            print("\n[Call] Ending session")
+            self.cseq += 1
+            bye_packet = SipPacket()
+            bye_packet.method = "BYE"
+            bye_packet.call_id = self.call_id
+            bye_packet.cseq = self.cseq
+            bye_packet.from_addr = self.local_ip
+            bye_packet.to_addr = self.remote_ip
+            
+            encoded_packet = bye_packet.encode()
+            self.sip_socket.sendto(encoded_packet,
+                                  (self.remote_ip, self.remote_port))
+            print("[SIP] Sending termination request (BYE)")
+            
+            # Wait briefly for acknowledgment
+            try:
+                data, addr = self.sip_socket.recvfrom(2048)
+                if data:
+                    print(f"[SIP] Received response to BYE:\n{data.decode()}")
+            except socket.timeout:
+                print("[SIP] No response to BYE request")
+        except Exception as e:
+            print(f"[SIP] Error sending BYE: {e}")
 
     def _send_ack(self, addr):
         """Send ACK for successful call setup"""
