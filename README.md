@@ -53,10 +53,17 @@ The receiver listens for incoming SIP calls and plays the received audio in real
 python AudioLauncher_CoTan.py <local_ip> <local_port> <remote_ip> <remote_port> <audio_file> receiver
 ```
 
-Example:
+Examples:
 
 ```bash
+# Local testing (Receiver on localhost)
 python AudioLauncher_CoTan.py 127.0.0.1 5061 127.0.0.1 5060 sample.wav receiver
+
+# Local Host A (Receiver)
+python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 dummy.wav receiver
+
+# On Host A (Receiver) - Different networks
+python AudioLauncher_CoTan.py <Host_A_IP> 5060 <Host_B_IP> 5070 dummy.wav receiver
 ```
 
 ### Running the Caller
@@ -67,10 +74,17 @@ The caller initiates a SIP call and streams the specified audio file to the rece
 python AudioLauncher_CoTan.py <local_ip> <local_port> <remote_ip> <remote_port> <audio_file> caller
 ```
 
-Example:
+Examples:
 
 ```bash
+# Local testing (Caller on localhost)
 python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5061 sample.wav caller
+
+# Local Host B (Caller)
+python AudioLauncher_CoTan.py 127.0.0.1 5070 127.0.0.1 5060 your_audio.wav caller
+
+# On Host B (Caller) - Different networks
+python AudioLauncher_CoTan.py <Host_B_IP> 5070 <Host_A_IP> 5060 your_audio.wav caller
 ```
 
 ---
