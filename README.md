@@ -2,90 +2,203 @@
 
 This project implements a simplified VoIP application that uses SIP for signaling and RTP for media transport. The implementation focuses on audio streaming between two clients, without requiring a SIP proxy.
 
+---
+
 ## Features
 
-- SIP signaling (INVITE, ACK, BYE) for call setup and teardown
-- RTP streaming of audio data
-- Basic RTCP reports for statistics
-- Real-time audio playback on the receiving end
+- **SIP Signaling**:
+  - Handles `INVITE`, `ACK`, `BYE`, and `200 OK` messages for call setup and teardown.
+  - Includes SDP (Session Description Protocol) for media negotiation.
+- **RTP Streaming**:
+  - Streams audio data over RTP using G.711 (PCMU) codec.
+  - Supports real-time playback on the receiving end.
+- **RTCP Reporting**:
+  - Periodically sends and receives RTCP packets for stream statistics (e.g., packet count, jitter).
+- **Audio Playback and Conversion**:
+  - Supports `.wav` files with mono, 16-bit PCM encoding, and 8000 Hz sample rate.
+  - Converts unsupported audio formats to the required format using `scipy` and `soundfile`.
+- **Error Handling**:
+  - Gracefully handles SIP errors (e.g., `4xx`, `5xx` responses).
+  - Logs and recovers from unexpected RTP/RTCP packet issues.
+  - Ensures the application does not crash on invalid inputs or network errors.
+
+---
 
 ## Requirements
 
-- Python 3.7+
-- PyAudio (`pip install pyaudio`)
-- wave module (included in Python standard library)
+- **Python Version**: Python 3.7+
+- **Dependencies**:
+  - `pyaudio` (for audio playback and recording)
+  - `scipy` (for audio resampling)
+  - `soundfile` (for audio format conversion)
+  - `numpy` (for audio data manipulation)
 
-### Installing PyAudio
+### Installing Dependencies
 
-PyAudio may require additional system dependencies:
+Run the following command to install the required Python packages:
 
-**Windows:**
-```
-pip install pyaudio
-```
-
-**Linux:**
-```
-sudo apt-get install python3-pyaudio
-# or
-sudo apt-get install portaudio19-dev
-pip install pyaudio
+```bash
+pip install pyaudio scipy soundfile numpy
 ```
 
-**macOS:**
-```
-brew install portaudio
-pip install pyaudio
-```
+---
 
 ## Usage
 
 ### Running the Receiver
 
+The receiver listens for incoming SIP calls and plays the received audio in real-time.
+
 ```bash
-python client.py --mode receiver --local-ip 127.0.0.1 --local-sip-port 5061 --local-rtp-port 10001 --remote-ip 127.0.0.1 --remote-sip-port 5060
+python AudioLauncher_CoTan.py <local_ip> <local_port> <remote_ip> <remote_port> <audio_file> receiver
+```
+
+Example:
+
+```bash
+python AudioLauncher_CoTan.py 127.0.0.1 5061 127.0.0.1 5060 sample.wav receiver
 ```
 
 ### Running the Caller
 
-```bash
-python client.py --mode caller --local-ip 127.0.0.1 --local-sip-port 5060 --local-rtp-port 10000 --remote-ip 127.0.0.1 --remote-sip-port 5061 --audio-file sample.wav
-```
-
-### Running the Test Script
-
-For quick testing on a single machine:
+The caller initiates a SIP call and streams the specified audio file to the receiver.
 
 ```bash
-python test.py sample.wav
+python AudioLauncher_CoTan.py <local_ip> <local_port> <remote_ip> <remote_port> <audio_file> caller
 ```
 
-## Audio File Format
+Example:
 
-The application is designed to work with:
-- WAV files
-- Mono (single channel)
-- 16-bit PCM encoding
-- 8000 Hz sample rate (for optimal G.711 compatibility)
+```bash
+python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5061 sample.wav caller
+```
 
-## Project Structure
+---
 
-- `client.py` - Main VoIP client application
-- `sip_handler.py` - SIP protocol implementation
-- `rtp_handler.py` - RTP/RTCP implementation
-- `test.py` - Helper script to test the application
+## Test Cases
+
+### Test Case 1: Localhost Communication
+
+1. Start the receiver:
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5061 127.0.0.1 5060 sample.wav receiver
+   ```
+2. Start the caller:
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5061 sample.wav caller
+   ```
+3. Expected Output:
+   - The receiver plays the audio file in real-time.
+   - Both the caller and receiver log SIP messages (`INVITE`, `200 OK`, `ACK`, `BYE`) and RTP/RTCP statistics.
+
+### Test Case 2: Invalid Audio File
+
+1. Run the caller with an unsupported audio file format:
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5061 invalid.mp3 caller
+   ```
+2. Expected Output:
+   - The application converts the file to `.wav` format and streams it successfully.
+   - Logs indicate the conversion process.
+
+### Test Case 3: Network Error
+
+1. Disconnect the network or terminate the receiver during the call.
+2. Expected Output:
+   - The caller logs an error indicating the network issue.
+   - The application does not crash and gracefully terminates the session.
+
+---
+
+## Sample Outputs
+
+### Caller Output
+
+```plaintext
+[SIP] Sending INVITE to 127.0.0.1:5061
+[SIP] Received 200 OK
+[SIP] Sending ACK
+[RTP] Starting audio stream to 127.0.0.1:10003
+[RTP] Sending packet: 160 bytes (Sequence #1)
+[RTP] Sending packet: 160 bytes (Sequence #2)
+...
+[RTCP Report Sent]
+Total Packets: 100
+Total Data Sent: 16,000 bytes
+Average Bitrate: 64.0 kbps
+[SIP] Sending BYE
+```
+
+### Receiver Output
+
+```plaintext
+[SIP] Received INVITE
+[SIP] Sending 200 OK
+[SIP] Received ACK
+[Call] Session established - Ready to receive audio
+[RTP] Received packet: 160 bytes (Sequence #1)
+[RTP] Received packet: 160 bytes (Sequence #2)
+...
+[RTCP Report Received]
+Total Packets: 100
+Total Bytes: 16,000 bytes
+[Call] Remote party ended the session
+```
+
+---
 
 ## Implementation Notes
 
-1. This is a simplified implementation focusing on the core protocols
-2. No NAT traversal or complex error recovery
-3. Audio encoding is basic (using raw PCM data rather than proper G.711)
-4. Real deployments would use a more robust SIP stack
+1. **Audio Format**:
+   - The application supports `.wav` files with mono, 16-bit PCM encoding, and 8000 Hz sample rate.
+   - Other formats are automatically converted to the required format.
+2. **SIP Protocol**:
+   - The implementation includes basic SIP signaling for call setup and teardown.
+   - No SIP proxy or registrar is required.
+3. **RTP/RTCP**:
+   - RTP is used for real-time audio streaming.
+   - RTCP provides periodic statistics for monitoring stream quality.
+4. **Error Handling**:
+   - Handles invalid SIP messages, network errors, and unsupported audio formats gracefully.
+   - Logs detailed error messages for debugging.
+
+---
+
+## Known Limitations
+
+- NAT traversal is not supported (assumes both clients are on the same LAN).
+- Audio encoding is limited to G.711 (PCMU).
+- No advanced error recovery for dropped RTP packets.
+
+---
+
+## Project Structure
+
+- `AudioLauncher_CoTan.py`: Entry point for the application.
+- `AudioClient_CoTan.py`: Main VoIP client implementation.
+- `SipPacket_CoTan.py`: SIP packet handling.
+- `RtpPacket_CoTan.py`: RTP packet handling.
+- `README.md`: Documentation.
+
+---
 
 ## Protocol Flow
 
-1. Caller sends SIP INVITE with SDP offering RTP port
-2. Receiver responds with 200 OK and its own RTP port
-3. Caller acknowledges with ACK
-4. Media flows via RTP until one side sends BYE
-5. RTCP packets are exchanged periodically for statistics
+1. **Call Setup**:
+   - Caller sends `INVITE` with SDP offering RTP port.
+   - Receiver responds with `200 OK` and its own RTP port.
+   - Caller acknowledges with `ACK`.
+2. **Media Streaming**:
+   - Audio flows via RTP from caller to receiver.
+   - RTCP packets are exchanged periodically for statistics.
+3. **Call Teardown**:
+   - Either party sends `BYE` to terminate the session.
+   - The other party responds with `200 OK`.
+
+---
+
+## Additional Notes
+
+- Ensure the audio file is in the correct format or convertible.
+- Use the provided test cases to verify functionality.
+- For debugging, check the logs for detailed SIP and RTP/RTCP messages.
