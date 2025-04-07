@@ -91,7 +91,58 @@ python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5061 sample.wav caller
    - The receiver plays the audio file in real-time.
    - Both the caller and receiver log SIP messages (`INVITE`, `200 OK`, `ACK`, `BYE`) and RTP/RTCP statistics.
 
-### Test Case 2: Invalid Audio File
+### Test Case 2: Alternative Port Configuration
+
+1. Start the receiver:
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5070 127.0.0.1 5060 audio.wav receiver
+   ```
+2. Start the caller:
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 audio.wav caller
+   ```
+3. Expected Output:
+   - Same behavior as Test Case 1, but using different port numbers.
+
+### Test Case 3: Multi-Format Support
+
+The application supports multiple audio formats with automatic conversion. Run the receiver:
+```bash
+python AudioLauncher_CoTan.py 127.0.0.1 5070 127.0.0.1 5060 audio.wav receiver
+```
+
+Then test with different audio formats:
+
+1. **WAV format** (natively supported):
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 Test_WAV.wav caller
+   ```
+
+2. **AIFF format** (automatically converted):
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 Test_AIFF.aiff caller
+   ```
+
+3. **FLAC format** (automatically converted):
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 Test_FLAC.flac caller
+   ```
+
+4. **MP3 format** (automatically converted):
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 Test_MP3.mp3 caller
+   ```
+
+5. **OGG format** (automatically converted):
+   ```bash
+   python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5070 Test_OGG.ogg caller
+   ```
+
+Expected Output:
+- For non-WAV formats, the logs will show conversion process details
+- All formats should stream and play correctly after conversion
+
+### Test Case 4: Invalid Audio File
 
 1. Run the caller with an unsupported audio file format:
    ```bash
@@ -101,7 +152,7 @@ python AudioLauncher_CoTan.py 127.0.0.1 5060 127.0.0.1 5061 sample.wav caller
    - The application converts the file to `.wav` format and streams it successfully.
    - Logs indicate the conversion process.
 
-### Test Case 3: Network Error
+### Test Case 5: Network Error
 
 1. Disconnect the network or terminate the receiver during the call.
 2. Expected Output:
@@ -199,6 +250,6 @@ Total Bytes: 16,000 bytes
 
 ## Additional Notes
 
-- Ensure the audio file is in the correct format or convertible.
+- Ensure the audio file is in the correct format or convertible, do not rename the file format as it will cause errors.
 - Use the provided test cases to verify functionality.
 - For debugging, check the logs for detailed SIP and RTP/RTCP messages.
